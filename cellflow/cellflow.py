@@ -1,9 +1,23 @@
 from IPython.core.magic import Magics, magics_class, line_cell_magic, cell_magic
+import shlex
 
 @magics_class
 class Cellflow(Magics):
 
-    flow = {}
+    def __init__(self, shell):
+        super(Cellflow, self).__init__(shell)
+        self.flow = {}
+        self.verbose = False
+
+    @line_cell_magic
+    def cellflow_configure(self, line, cell=None):
+        if not cell:
+            cell = ''
+        txt = shlex.split((line + ' ' + cell).replace('\n', ' '))
+        args = {k: True if v.startswith('-') else v for k,v in zip(txt, txt[1:]+['--']) if k.startswith('-')}
+        self.verbose = args.get('-v', False)
+        if self.verbose:
+            print('Verbose mode enabled')
 
     @cell_magic
     def onchange(self, line, cell):
@@ -22,13 +36,12 @@ class Cellflow(Magics):
         else:
             outputs = line[i+2:].replace(',', ' ').split()
         inputs = line[:i].replace(',', ' ').split()
-        flow = type(self).flow
         for varname in outputs:
-            if varname not in flow:
-                flow[varname] = {}
-            flow[varname]['in'] = {i:[] for i in inputs}
-            flow[varname]['out'] = outputs
-            flow[varname]['code'] = cell
+            if varname not in self.flow:
+                self.flow[varname] = {}
+            self.flow[varname]['in'] = {i:[] for i in inputs}
+            self.flow[varname]['out'] = outputs
+            self.flow[varname]['code'] = cell
 
     @line_cell_magic
     def compute(self, line, cell=None):
@@ -42,24 +55,13 @@ class Cellflow(Magics):
         %%compute c, d
         ...additional code (like result printing)...
         
-        To turn on verbose mode, add the -v switch:
-        %compute c, d -v
-
         Will figure out the data flow and optimally compute the results.
         '''
-        verbose = False
-        log = ''
-        if '-' in line:
-            i = line.find('-')
-            option = line[i+1:i+2]
-            line = line[:i] + line[i+2:]
-            if option == 'v':
-                verbose = True
         varnames = line.replace(',', ' ').split()
-        flow = type(self).flow
-        done = False
+        log = ''
         paths = [[varname] for varname in varnames]
         # back-trace all variables to be computed
+        done = False
         while not done:
             done = True
             i_path = 0
@@ -67,8 +69,8 @@ class Cellflow(Magics):
                 path = paths[i_path]
                 varname = path[0] # source variable
                 has_dep = False
-                if varname in flow: # variable depends on other variable(s)
-                    for dep in flow[varname]['in']:
+                if varname in self.flow: # variable depends on other variable(s)
+                    for dep in self.flow[varname]['in']:
                         has_dep = True
                         paths.append([dep] + path)
                         done = False
@@ -97,7 +99,7 @@ class Cellflow(Magics):
                         log += f'Looking at variable {varname} in path: {" -> ".join(path)}\n'
                         done2 = True
                         dep = path[0]
-                        var_last = flow[varname]['in'][dep]
+                        var_last = self.flow[varname]['in'][dep]
                         var_new = self.shell.user_ns[dep]
                         if var_last:
                             if dep in self.shell.user_ns:
@@ -109,12 +111,12 @@ class Cellflow(Magics):
                                     changed = False
                             else:
                                 changed = True # but variable will be unknown...
-                                flow[varname]['in'][dep] = []
+                                self.flow[varname]['in'][dep] = []
                         else:
                             # dependency didn't exist, so a computation is required
                             changed = True
                             if dep in self.shell.user_ns:
-                                flow[varname]['in'][dep] = [var_new]
+                                self.flow[varname]['in'][dep] = [var_new]
                             else:
                                 # variable will be unknown...
                                 pass
@@ -155,14 +157,14 @@ class Cellflow(Magics):
                     if do_compute:
                         # do the computation
                         log += 'Computing:\n'
-                        log += flow[varname]['code'] + '\n'
-                        self.shell.ex(flow[varname]['code'])
-                        computed += flow[varname]['out']
+                        log += self.flow[varname]['code'] + '\n'
+                        self.shell.ex(self.flow[varname]['code'])
+                        computed += self.flow[varname]['out']
                         del path[0]
                     i_path += 1
                     log += '\n'
         log += 'All done!'
-        if verbose:
+        if self.verbose:
             print(log)
         if cell:
             self.shell.ex(cell)
