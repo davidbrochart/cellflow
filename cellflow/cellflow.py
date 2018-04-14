@@ -42,8 +42,19 @@ class Cellflow(Magics):
         %%compute c, d
         ...additional code (like result printing)...
         
+        To turn on verbose mode, add the -v switch:
+        %compute c, d -v
+
         Will figure out the data flow and optimally compute the results.
         '''
+        verbose = False
+        log = ''
+        if '-' in line:
+            i = line.find('-')
+            option = line[i+1:i+2]
+            line = line[:i] + line[i+2:]
+            if option == 'v':
+                verbose = True
         varnames = line.replace(',', ' ').split()
         flow = type(self).flow
         done = False
@@ -65,10 +76,10 @@ class Cellflow(Magics):
                         del paths[i_path]
                 if not has_dep:
                     i_path += 1
-        print('The data flow consists of all the following paths:')
+        log += 'The data flow consists of all the following paths:\n'
         for path in paths:
-            print(' -> '.join(path))
-        print()
+            log += ' -> '.join(path) + '\n'
+        log += '\n'
         # compute results in an optimal way
         computed = []
         done = False
@@ -83,7 +94,7 @@ class Cellflow(Magics):
                         done2 = True
                     else:
                         varname = path[1]
-                        print(f'Looking at variable {varname} in path: {" -> ".join(path)}')
+                        log += f'Looking at variable {varname} in path: {" -> ".join(path)}\n'
                         done2 = True
                         dep = path[0]
                         var_last = flow[varname]['in'][dep]
@@ -92,7 +103,7 @@ class Cellflow(Magics):
                             if dep in self.shell.user_ns:
                                 if var_last[0] != self.shell.user_ns[dep]:
                                     changed = True
-                                    print(f"Variable {dep} has changed from {var_last[0]} to {var_new}")
+                                    log += f"Variable {dep} has changed from {var_last[0]} to {var_new}\n"
                                     var_last[0] = var_new
                                 else:
                                     changed = False
@@ -112,7 +123,7 @@ class Cellflow(Magics):
                             # this path does not need to re-compute the next variable.
                             # other paths might need to, this ensures that if any input changes
                             # the outputs are re-computed.
-                            print('No computation required\n')
+                            log += 'No computation required\n\n'
                             del path[0]
                             if len(path) == 1:
                                 done2 = True
@@ -130,26 +141,28 @@ class Cellflow(Magics):
                         if varname in p:
                             i = p.index(varname)
                             if i != 0:
-                                print(f'Variable {varname} is also in path: {" -> ".join(p)}')
+                                log += f'Variable {varname} is also in path: {" -> ".join(p)}\n'
                                 # variable has another dependency, through another path
                                 if i > 1:
                                     # and this dependency has dependencies, so let's update them first.
                                     # this means forgetting this path for now, we will come back to it later.
-                                    print('And other variables have to be computed first')
+                                    log += 'And other variables have to be computed first\n'
                                     done = False
                                     do_compute = False
                                     break
                                 else:
-                                    print("Which doesn't prevent computing it")
+                                    log += "Which doesn't prevent computing it\n"
                     if do_compute:
                         # do the computation
-                        print('Computing:')
-                        print(flow[varname]['code'])
+                        log += 'Computing:\n'
+                        log += flow[varname]['code'] + '\n'
                         self.shell.ex(flow[varname]['code'])
                         computed += flow[varname]['out']
                         del path[0]
                     i_path += 1
-                    print()
-        print('All done!')
+                    log += '\n'
+        log += 'All done!'
+        if verbose:
+            print(log)
         if cell:
             self.shell.ex(cell)
