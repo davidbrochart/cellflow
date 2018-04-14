@@ -3,7 +3,7 @@ Cellflow is an IPython cell-based dataflow automation tool whose API is built wi
 How it works
 ============
 
-Instead of being fully reactive, as [observable notebooks](https://beta.observablehq.com/) are, cellflow only tries to bring to the Jupyter Notebook (or even the IPython console) a way to link cells to each other. It lets the user specify on which variables a cell will react, and what results it will produce. Based on this information, cellflow will take care of executing the right cell at the right time when a result is asked for. You can think of it as the equivalent of the `make` tool for interactive computing.
+Instead of being fully reactive, as [observable notebooks](https://beta.observablehq.com/) are, cellflow only tries to bring to the Jupyter Notebook (or even the IPython console) a way to link cells to each other. It lets the user specify which variables a cell will react to, and what results it will produce. Based on this information, cellflow will take care of executing the right cell at the right time when a result is asked for. You can think of it as the equivalent of the `make` tool for interactive computing.
 
 ```python
 %%onchange a, b -> c, d
