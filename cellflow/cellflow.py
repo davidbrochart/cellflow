@@ -100,23 +100,25 @@ class Cellflow(Magics):
                         done2 = True
                         dep = path[0]
                         var_last = self.flow[varname]['in'][dep]
-                        var_new = self.shell.user_ns[dep]
+                        var_new = []
+                        if dep in self.shell.user_ns:
+                            var_new.append(self.shell.user_ns[dep])
                         if var_last:
-                            if dep in self.shell.user_ns:
-                                if var_last[0] != self.shell.user_ns[dep]:
+                            if var_new:
+                                if var_last[0] != var_new[0]:
                                     changed = True
-                                    log += f"Variable {dep} has changed from {var_last[0]} to {var_new}\n"
-                                    var_last[0] = var_new
+                                    log += f"Variable {dep} has changed from {var_last[0]} to {var_new[0]}\n"
+                                    var_last[0] = var_new[0]
                                 else:
                                     changed = False
                             else:
                                 changed = True # but variable will be unknown...
-                                self.flow[varname]['in'][dep] = []
+                                del var_last[0]
                         else:
                             # dependency didn't exist, so a computation is required
                             changed = True
                             if dep in self.shell.user_ns:
-                                self.flow[varname]['in'][dep] = [var_new]
+                                var_last.append(var_new[0])
                             else:
                                 # variable will be unknown...
                                 pass
