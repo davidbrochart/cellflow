@@ -1,5 +1,7 @@
 from IPython.core.magic import Magics, magics_class, line_cell_magic, cell_magic
 import shlex
+import pickle
+import hashlib
 
 @magics_class
 class Cellflow(Magics):
@@ -7,6 +9,7 @@ class Cellflow(Magics):
     def __init__(self, shell):
         super(Cellflow, self).__init__(shell)
         self.flow = {}
+        self.log = ''
         self.verbose = False
 
     @line_cell_magic
@@ -36,12 +39,20 @@ class Cellflow(Magics):
         else:
             outputs = line[i+2:].replace(',', ' ').split()
         inputs = line[:i].replace(',', ' ').split()
+        deps = {i:None for i in inputs} # shared data between output variables of a cell
+                                        # so that it updates automatically
         for varname in outputs:
             if varname not in self.flow:
                 self.flow[varname] = {}
-            self.flow[varname]['in'] = {i:[] for i in inputs}
+            self.flow[varname]['in'] = deps
             self.flow[varname]['out'] = outputs
             self.flow[varname]['code'] = cell
+
+    def fingerprint(self, varname):
+        pkl = pickle.dumps(self.shell.user_ns[varname])
+        hasher = hashlib.md5()
+        hasher.update(pkl)
+        return hasher.hexdigest()
 
     @line_cell_magic
     def compute(self, line, cell=None):
@@ -58,115 +69,103 @@ class Cellflow(Magics):
         Will figure out the data flow and optimally compute the results.
         '''
         varnames = line.replace(',', ' ').split()
-        log = ''
+        self.log = ''
         paths = [[varname] for varname in varnames]
-        # back-trace all variables to be computed
-        done = False
-        while not done:
-            done = True
+        # back-trace all variables to be computed and get all possible paths to them
+        has_dep = True
+        while has_dep:
+            has_dep = False
             i_path = 0
             while i_path < len(paths):
                 path = paths[i_path]
-                varname = path[0] # source variable
+                varname = path[0] # input variable
                 has_dep = False
                 if varname in self.flow: # variable depends on other variable(s)
+                    has_dep = True
                     for dep in self.flow[varname]['in']:
-                        has_dep = True
                         paths.append([dep] + path)
-                        done = False
-                    if has_dep:
-                        del paths[i_path]
+                    del paths[i_path]
                 if not has_dep:
                     i_path += 1
-        log += 'The data flow consists of all the following paths:\n'
+        self.log += 'The data flow consists of the following paths:\n'
         for path in paths:
-            log += ' -> '.join(path) + '\n'
-        log += '\n'
+            self.log += ' -> '.join(path) + '\n'
         # compute results in an optimal way
-        computed = []
         done = False
         while not done:
             done = True
             i_path = 0
             while i_path < len(paths):
+                # let's see first if dependencies have other dependencies
+                other_paths = [p for i, p in enumerate(paths) if i != i_path]
+                do_compute = True
                 path = paths[i_path]
-                done2 = False
-                while not done2:
-                    if len(path) == 1:
-                        done2 = True
-                    else:
-                        varname = path[1]
-                        log += f'Looking at variable {varname} in path: {" -> ".join(path)}\n'
-                        done2 = True
-                        dep = path[0]
-                        var_last = self.flow[varname]['in'][dep]
-                        var_new = []
-                        if dep in self.shell.user_ns:
-                            var_new.append(self.shell.user_ns[dep])
-                        if var_last:
-                            if var_new:
-                                if var_last[0] != var_new[0]:
-                                    changed = True
-                                    log += f"Variable {dep} has changed from {var_last[0]} to {var_new[0]}\n"
-                                    var_last[0] = var_new[0]
-                                else:
-                                    changed = False
+                varname = path[1] # target
+                dep = path[0] # dependency
+                self.log += f'\nLooking at target variable {varname} in path: {" -> ".join(path)}\n'
+                for p in other_paths:
+                    if varname in p:
+                        i = p.index(varname)
+                        if i != 0:
+                            self.log += f'Variable {varname} is also in path: {" -> ".join(p)}\n'
+                            # variable has another dependency, through another path
+                            if i > 1:
+                                # and this dependency has dependencies, so let's update them first.
+                                # this means skipping this path, we will come back to it later.
+                                self.log += 'And other variables have to be computed first\n'
+                                done = False
+                                do_compute = False
+                                break
                             else:
-                                changed = True # but variable will be unknown...
-                                del var_last[0]
+                                self.log += "Which doesn't prevent computing it\n"
+
+                if do_compute:
+                    # this path doesn't have to wait for other paths,
+                    # now let's see if dependencies have changed.
+                    var_last = self.flow[varname]['in'][dep]
+                    var_new = None
+                    if dep in self.shell.user_ns:
+                        var_new = self.fingerprint(dep)
+                    if var_last:
+                        if var_new:
+                            if var_last != var_new:
+                                changed = True
+                                self.flow[varname]['in'][dep] = var_new
+                            else:
+                                changed = False
                         else:
-                            # dependency didn't exist, so a computation is required
-                            changed = True
-                            if dep in self.shell.user_ns:
-                                var_last.append(var_new[0])
-                            else:
-                                # variable will be unknown...
-                                pass
-                        if (len(path) > 1) and ((varname in computed) or (not changed)):
-                            # variable has not changed, or the computation has already been done.
-                            # this path does not need to re-compute the next variable.
-                            # other paths might need to, this ensures that if any input changes
-                            # the outputs are re-computed.
-                            log += 'No computation required\n\n'
-                            del path[0]
-                            if len(path) == 1:
-                                done2 = True
-                            else:
-                                done2 = False
+                            changed = True # but variable will be unknown...
+                            self.flow[varname]['in'][dep] = None
+                    else:
+                        # dependency didn't exist, so a computation is required
+                        changed = True
+                        if var_new:
+                            self.flow[varname]['in'][dep] = var_new
+                        else:
+                            # variable will be unknown...
+                            pass
+                    if changed:
+                        self.log += f'Variable {dep} has changed\n'
+                    if not changed:
+                        # dependency has not changed, no computation required for this path
+                        do_compute = False
+                        self.log += 'No computation required\n'
+                        del path[0]
+                if do_compute:
+                    # do the computation
+                    self.log += 'Computing:\n'
+                    self.log += self.flow[varname]['code'] + '\n'
+                    self.shell.ex(self.flow[varname]['code'])
+                    # prevent further execution of this cell by updating its dependencies:
+                    for i in self.flow[varname]['in']:
+                        self.flow[varname]['in'][i] = self.fingerprint(i)
+                    del path[0]
                 if len(path) == 1:
-                    # target variable does not need to be re-computed through this path, then delete the path
                     del paths[i_path]
                 else:
-                    # next variable must be re-computed, but we need to update all its dependencies before
-                    # doing the computation, otherwise the computation will be done several times.
-                    other_paths = [p for i, p in enumerate(paths) if i != i_path]
-                    do_compute = True
-                    for p in other_paths:
-                        if varname in p:
-                            i = p.index(varname)
-                            if i != 0:
-                                log += f'Variable {varname} is also in path: {" -> ".join(p)}\n'
-                                # variable has another dependency, through another path
-                                if i > 1:
-                                    # and this dependency has dependencies, so let's update them first.
-                                    # this means forgetting this path for now, we will come back to it later.
-                                    log += 'And other variables have to be computed first\n'
-                                    done = False
-                                    do_compute = False
-                                    break
-                                else:
-                                    log += "Which doesn't prevent computing it\n"
-                    if do_compute:
-                        # do the computation
-                        log += 'Computing:\n'
-                        log += self.flow[varname]['code'] + '\n'
-                        self.shell.ex(self.flow[varname]['code'])
-                        computed += self.flow[varname]['out']
-                        del path[0]
                     i_path += 1
-                    log += '\n'
-        log += 'All done!'
+        self.log += '\nAll done!'
         if self.verbose:
-            print(log)
+            print(self.log)
         if cell:
             self.shell.ex(cell)
