@@ -123,14 +123,14 @@ class Cellflow(Magics):
                     # this path doesn't have to wait for other paths,
                     # now let's see if dependencies have changed.
                     var_last = self.flow[varname]['in'][dep]
-                    var_new = None
                     if dep in self.shell.user_ns:
                         var_new = self.fingerprint(dep)
+                    else:
+                        var_new = None
                     if var_last:
                         if var_new:
                             if var_last != var_new:
                                 changed = True
-                                self.flow[varname]['in'][dep] = var_new
                             else:
                                 changed = False
                         else:
@@ -139,24 +139,20 @@ class Cellflow(Magics):
                     else:
                         # dependency didn't exist, so a computation is required
                         changed = True
-                        if var_new:
-                            self.flow[varname]['in'][dep] = var_new
-                        else:
-                            # variable will be unknown...
-                            pass
                     if changed:
                         self.log += f'Variable {dep} has changed\n'
                     if not changed:
                         # dependency has not changed, no computation required for this path
                         do_compute = False
-                        self.log += 'No computation required\n'
+                        self.log += 'No change in dependencies\n'
                         del path[0]
                 if do_compute:
                     # do the computation
                     self.log += 'Computing:\n'
                     self.log += self.flow[varname]['code'] + '\n'
                     self.shell.ex(self.flow[varname]['code'])
-                    # prevent further execution of this cell by updating its dependencies:
+                    # save dependency fingerprints for this computation, so that nothing happens if no change in dependencies.
+                    # this also prevents further execution of this cell through other paths, since it was already done.
                     for i in self.flow[varname]['in']:
                         self.flow[varname]['in'][i] = self.fingerprint(i)
                     del path[0]
@@ -168,4 +164,4 @@ class Cellflow(Magics):
         if self.verbose:
             print(self.log)
         if cell:
-            self.shell.ex(cell)
+             self.shell.ex(cell)
